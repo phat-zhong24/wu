@@ -2,6 +2,17 @@ pub use std::process::Stdio;
 use std::time::Duration;
 pub use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Agent CLIs are console programs. Hide their console window when Wu is a GUI app.
+pub(crate) fn hide_console_window(command: &mut Command) {
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 #[cfg(unix)]
 pub(crate) fn signal_target(child: &Child) -> Option<i32> {
     let pid = child.id()? as i32;

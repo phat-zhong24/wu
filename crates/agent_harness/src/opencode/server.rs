@@ -193,6 +193,7 @@ impl Server {
         })?;
         let password = uuid::Uuid::new_v4().to_string();
         let mut command = Command::new(executable);
+        crate::process::hide_console_window(&mut command);
         command
             .arg("serve")
             .arg("--port")

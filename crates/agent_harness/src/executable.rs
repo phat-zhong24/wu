@@ -266,6 +266,7 @@ pub fn binary_version(path: &Path) -> Option<semver::Version> {
                 .ok()?
                 .block_on(async {
                     let mut command = crate::process::Command::new(&path);
+                    crate::process::hide_console_window(&mut command);
                     command
                         .current_dir(scratch_dir())
                         .arg("--version")

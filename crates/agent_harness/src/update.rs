@@ -23,6 +23,7 @@ pub async fn update_cli(
 ) -> Result<UpdateOutcome, UpdateFailed> {
     let before = version_of(&executable).await;
     let mut command = Command::new(&executable);
+    crate::process::hide_console_window(&mut command);
     command
         .args(args)
         .current_dir(crate::executable::scratch_dir())
