@@ -46,6 +46,19 @@ pub(crate) struct DirectXDevices {
 impl DirectXDevices {
     pub(crate) fn new() -> Result<Self> {
         let debug_layer_available = check_debug_layer_available();
+        match Self::new_with_debug_layer(debug_layer_available) {
+            Ok(devices) => Ok(devices),
+            Err(error) if debug_layer_available => {
+                log::warn!(
+                    "Failed to initialize DirectX with the debug layer enabled: {error:#}. Retrying without it."
+                );
+                Self::new_with_debug_layer(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn new_with_debug_layer(debug_layer_available: bool) -> Result<Self> {
         let dxgi_factory =
             get_dxgi_factory(debug_layer_available).context("Creating DXGI factory")?;
         let (adapter, device, device_context, feature_level) =
@@ -74,6 +87,10 @@ impl DirectXDevices {
 
 #[inline]
 fn check_debug_layer_available() -> bool {
+    if std::env::var("WU_DISABLE_DXGI_DEBUG").is_ok() {
+        return false;
+    }
+
     #[cfg(debug_assertions)]
     {
         use windows::Win32::Graphics::Dxgi::{DXGIGetDebugInterface1, IDXGIInfoQueue};

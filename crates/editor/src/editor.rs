@@ -15,6 +15,7 @@ mod bracket_colorization;
 mod clangd_ext;
 pub mod code_context_menus;
 mod code_lens;
+mod cursor_animation;
 pub mod display_map;
 mod document_colors;
 mod document_links;
@@ -123,6 +124,7 @@ use code_context_menus::{
 use code_lens::CodeLensState;
 use collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use convert_case::{Case, Casing};
+use cursor_animation::CursorAnimationStates;
 use display_map::*;
 use document_colors::LspColorData;
 use document_links::LspDocumentLinks;
@@ -951,6 +953,7 @@ pub struct Editor {
     semantics_provider: Option<Rc<dyn SemanticsProvider>>,
     completion_provider: Option<Rc<dyn CompletionProvider>>,
     blink_manager: Entity<BlinkManager>,
+    cursor_animations: CursorAnimationStates,
     pub show_local_selections: bool,
     mode: EditorMode,
     breadcrumbs_visibility: BreadcrumbsVisibility,
@@ -2268,6 +2271,7 @@ impl Editor {
                 .map(|project| Rc::new(project.downgrade()) as _),
             project,
             blink_manager: blink_manager.clone(),
+            cursor_animations: CursorAnimationStates::default(),
             show_local_selections: true,
             show_scrollbars: ScrollbarAxes {
                 horizontal: full_mode,
@@ -10447,6 +10451,7 @@ impl Editor {
     }
 
     fn handle_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_animations.clear();
         cx.emit(EditorEvent::Focused);
 
         if let Some(descendant) = self
@@ -10508,6 +10513,7 @@ impl Editor {
     }
 
     pub fn handle_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cursor_animations.clear();
         self.blink_manager.update(cx, BlinkManager::disable);
         self.buffer
             .update(cx, |buffer, cx| buffer.remove_active_selections(cx));

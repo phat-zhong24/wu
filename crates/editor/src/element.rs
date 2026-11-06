@@ -6,6 +6,9 @@ pub(crate) use header::StickyHeader;
 pub use header::file_status_label_color;
 pub(crate) use header::{header_jump_data, render_buffer_header};
 
+use crate::cursor_animation::{
+    CursorAnimationConfig, CursorViewport, LogicalCursorPosition, animated_corners_overlap_target,
+};
 use crate::{
     BUFFER_HEADER_PADDING, BlockId, ChunkRendererContext, ChunkReplacement, CodeActionSource,
     ConflictsOurs, ConflictsOursMarker, ConflictsOuter, ConflictsTheirs, ConflictsTheirsMarker,
@@ -139,6 +142,7 @@ impl LineNumberStyle {
 
 #[derive(Debug)]
 struct SelectionLayout {
+    id: usize,
     head: DisplayPoint,
     cursor_shape: CursorShape,
     is_newest: bool,
@@ -166,6 +170,7 @@ impl SelectionLayout {
         is_local: bool,
         user_name: Option<SharedString>,
     ) -> Self {
+        let id = selection.id;
         let buffer_snapshot = map.buffer_snapshot();
         let point_selection = selection.map(|p| p.to_point(buffer_snapshot));
         let display_selection = point_selection.map(|p| p.to_display_point(map));
@@ -219,6 +224,7 @@ impl SelectionLayout {
         }
 
         Self {
+            id,
             head,
             cursor_shape,
             is_newest,
@@ -937,8 +943,39 @@ impl EditorElement {
         let mut autoscroll_bounds = None;
         let cursor_layouts = self.editor.update(cx, |editor, cx| {
             let mut cursors = Vec::new();
+            let mut handled_animation_cursors = HashSet::default();
+            let mut request_animation_frame = false;
 
             let show_local_cursors = editor.show_local_cursors(window, cx);
+            let animation_settings = EditorSettings::get_global(cx).cursor_animation;
+            editor
+                .cursor_animations
+                .set_config(CursorAnimationConfig::from_settings(animation_settings));
+            let animation_enabled = animation_settings.enabled && !cx.reduce_motion();
+            let animation_context = animation_enabled.then(|| {
+                (
+                    CursorViewport::new(
+                        content_origin,
+                        text_hitbox.bounds,
+                        scroll_position,
+                        scroll_pixel_position,
+                        line_height,
+                        em_advance,
+                    ),
+                    std::time::Instant::now(),
+                )
+            });
+
+            if animation_enabled {
+                let newest_animation_selection_id =
+                    cursor_shape_supports_cursor_animation(editor.cursor_shape)
+                        .then(|| editor.selections.newest_anchor().id);
+                editor
+                    .cursor_animations
+                    .reconcile_newest_selection(newest_animation_selection_id);
+            } else {
+                editor.cursor_animations.clear();
+            }
 
             for (player_color, selections) in selections {
                 for selection in selections {
@@ -1079,6 +1116,7 @@ impl EditorElement {
                         shape: selection.cursor_shape,
                         block_text,
                         cursor_name: None,
+                        animated_corners: None,
                     };
                     let cursor_name = selection.user_name.clone().map(|name| CursorName {
                         string: name,
@@ -1086,7 +1124,39 @@ impl EditorElement {
                         is_top_row: cursor_position.row().0 == 0,
                     });
                     cursor.layout(content_origin, cursor_name, window, cx);
+                    if selection.is_local
+                        && cursor_shape_supports_cursor_animation(selection.cursor_shape)
+                    {
+                        if let Some((cursor_viewport, animation_now)) = animation_context {
+                            handled_animation_cursors.insert(selection.id);
+                            let target_bounds =
+                                window.pixel_snap_bounds(cursor.bounds(content_origin));
+                            cursor.animated_corners = editor.cursor_animations.update(
+                                selection.id,
+                                LogicalCursorPosition {
+                                    row: cursor_position.row().0,
+                                    column: cursor_position.column(),
+                                },
+                                target_bounds,
+                                cursor_viewport,
+                                animation_now,
+                            );
+                            request_animation_frame |= cursor.animated_corners.is_some();
+                        }
+                    } else if animation_enabled && selection.is_local {
+                        editor.cursor_animations.remove(selection.id);
+                    }
                     cursors.push(cursor);
+                }
+            }
+
+            if animation_enabled {
+                editor.cursor_animations.capture_newest_state();
+                editor
+                    .cursor_animations
+                    .retain(|selection_id| handled_animation_cursors.contains(&selection_id));
+                if request_animation_frame {
+                    window.request_animation_frame();
                 }
             }
 
@@ -6439,6 +6509,7 @@ impl EditorElement {
                         let start = range.start.to_display_point(display_snapshot);
                         let end = range.end.to_display_point(display_snapshot);
                         let selection_layout = SelectionLayout {
+                            id: 0,
                             head: start,
                             range: start..end,
                             cursor_shape: CursorShape::Bar,
@@ -10094,6 +10165,7 @@ pub struct CursorLayout {
     shape: CursorShape,
     block_text: Option<ShapedLine>,
     cursor_name: Option<AnyElement>,
+    animated_corners: Option<[gpui::Point<Pixels>; 4]>,
 }
 
 #[derive(Debug)]
@@ -10121,6 +10193,7 @@ impl CursorLayout {
             shape,
             block_text,
             cursor_name: None,
+            animated_corners: None,
         }
     }
 
@@ -10193,18 +10266,33 @@ impl CursorLayout {
     pub fn paint(&mut self, origin: gpui::Point<Pixels>, window: &mut Window, cx: &mut App) {
         let bounds = window.pixel_snap_bounds(self.bounds(origin));
 
-        //Draw background or border quad
-        let cursor = if matches!(self.shape, CursorShape::Hollow) {
-            outline(bounds, self.color, BorderStyle::Solid)
+        if let Some(corners) = self.animated_corners {
+            let mut builder = gpui::PathBuilder::fill();
+            builder.add_polygon(&corners, true);
+            if let Ok(path) = builder.build() {
+                if let Some(name) = &mut self.cursor_name {
+                    name.paint(window, cx);
+                }
+                window.paint_path(path, self.color);
+
+                if !animated_corners_overlap_target(bounds, &corners) {
+                    return;
+                }
+            }
         } else {
-            fill(bounds, self.color)
-        };
+            //Draw background or border quad
+            let cursor = if matches!(self.shape, CursorShape::Hollow) {
+                outline(bounds, self.color, BorderStyle::Solid)
+            } else {
+                fill(bounds, self.color)
+            };
 
-        if let Some(name) = &mut self.cursor_name {
-            name.paint(window, cx);
+            if let Some(name) = &mut self.cursor_name {
+                name.paint(window, cx);
+            }
+
+            window.paint_quad(cursor);
         }
-
-        window.paint_quad(cursor);
 
         if let Some(block_text) = &self.block_text {
             block_text
@@ -10223,6 +10311,10 @@ impl CursorLayout {
     pub fn shape(&self) -> CursorShape {
         self.shape
     }
+}
+
+fn cursor_shape_supports_cursor_animation(shape: CursorShape) -> bool {
+    matches!(shape, CursorShape::Bar | CursorShape::Block)
 }
 
 #[derive(Debug)]
@@ -11979,6 +12071,7 @@ mod tests {
             };
 
             let spanning_selection = SelectionLayout {
+                id: 0,
                 head: DisplayPoint::new(DisplayRow(3), 7),
                 cursor_shape: CursorShape::Bar,
                 is_newest: true,
@@ -12028,6 +12121,7 @@ mod tests {
             };
 
             let selection = SelectionLayout {
+                id: 0,
                 head: DisplayPoint::new(DisplayRow(2), 0),
                 cursor_shape: CursorShape::Bar,
                 is_newest: true,
