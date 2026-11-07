@@ -2,10 +2,10 @@
 AppId={#AppId}
 AppName={#AppName}
 AppVerName={#AppDisplayName}
-AppPublisher=Farshed
-AppPublisherURL=https://github.com/dstrml/wu
-AppSupportURL=https://github.com/dstrml/wu/issues
-AppUpdatesURL=https://github.com/dstrml/wu/releases
+AppPublisher=Mitchell
+AppPublisherURL=https://github.com/phat-zhong24/wu
+AppSupportURL=https://github.com/phat-zhong24/wu/issues
+AppUpdatesURL=https://github.com/phat-zhong24/wu/releases
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -1399,7 +1399,7 @@ var
 begin
   Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + '{' + '{#OldAppId}' + '}_is1';
   // The old AppId is also Zed's, so only remove entries that Wu wrote.
-  if not RegQueryStringValue(HKCU, Key, 'Publisher', Publisher) or (Publisher <> 'Farshed') then
+  if not RegQueryStringValue(HKCU, Key, 'Publisher', Publisher) or ((Publisher <> 'Farshed') and (Publisher <> 'Mitchell')) then
     exit;
   if RegQueryStringValue(HKCU, Key, 'UninstallString', OldUninstaller) then
   begin
